@@ -6,25 +6,21 @@
  */
 package com.cyber.audio;
 
-import java.util.*;
-import com.cyber.storage.IProperties;
-import java.util.concurrent.*;
+import io.reactivex.subjects.PublishSubject;
+import io.reactivex.subjects.Subject;
+import java.util.Arrays;
 import javax.sound.sampled.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class AudioRecorder extends Thread{
+public class AudioRecorderRx extends Thread{
     protected final Logger log = LoggerFactory.getLogger(this.getClass().getSimpleName());
     protected volatile boolean proceed = true;
     
     protected TargetDataLine inputLine;
     protected AudioFormat format;
-    protected final BlockingQueue<byte[]> recordingQueue;
-    protected IProperties properties = null;
     
-    protected final int recordingQueueMax = 30;
-
     protected long lastOpenLineTime = 0L;
     protected long restartLineInterval = 0L;
     
@@ -33,21 +29,25 @@ public class AudioRecorder extends Thread{
     protected int lastSignalValue = 0;
     
     protected final int minFrameSize = 0;
-    protected int maxFrameSize = 3600;            // audioFrameSize and MTU tweak < max UDP packet size
+    protected int maxFrameSize = 1400;            // audioFrameSize and MTU tweak < max UDP packet size
     
     protected byte[] inputBuffer;
     
+    private PublishSubject<byte[]> outputSlot = PublishSubject.create();
     
-    public AudioRecorder(AudioFormat format){
+    public AudioRecorderRx(AudioFormat format){
         setName("AudioRecorder-" + getId());
         setPriority(Thread.MAX_PRIORITY);
              
         this.format = format;
-        recordingQueue = new ArrayBlockingQueue(recordingQueueMax);    
                 
         updateLastAudioSignalTime();
     }
     
+    public Subject<byte[]> outputSlot(){
+        return outputSlot;
+    }
+            
     
     public String toString(){
         return getName();
@@ -61,14 +61,6 @@ public class AudioRecorder extends Thread{
     
     public void stopRecorder(){
         proceed = false;
-    }
-    
-
-    public void setProperties(IProperties properties){
-        this.properties = properties;
-
-        this.setSilenceFilter(properties.getProperty("audio.recorder.silence", 16));
-        this.setRestartInterval(properties.getProperty("audio.recorder.restart.interval", 7200));
     }
     
     
@@ -131,38 +123,7 @@ public class AudioRecorder extends Thread{
         }
     }
     
-    
-    protected void pushRecordedAudioFrame(byte[] audiodata){
-        pushRecordedAudioFrame(audiodata, audiodata.length);
-    }
-    
-    
-    protected void pushRecordedAudioFrame(byte[] audiodata, int length){
-        if (length==0) return;
-
-        byte[] buf = Arrays.copyOf(audiodata, length);
-        while(!recordingQueue.offer(buf)){
-            if (recordingQueue.isEmpty()) break;
-            recordingQueue.poll();            
-        }
-    }    
-
-    
-    public byte[] pollDataChunk(){
-        return recordingQueue.poll();
-    }
-    
-    
-    public byte[] takeDataChunk(){
-        byte[] ret = null;
-        try{
-            ret = recordingQueue.take();
-        }catch(InterruptedException ex){
-        }        
-        return ret;
-    }
-    
-    
+        
     protected void updateLastAudioSignalTime(){
         lastRecordedSignalTime = System.currentTimeMillis();
     }
@@ -223,12 +184,17 @@ public class AudioRecorder extends Thread{
         return data;
     }
 
-        
-    public boolean isEmpty(){
-        return recordingQueue.isEmpty();
+    protected void pushRecordedAudioFrame(byte[] audiodata){
+        pushRecordedAudioFrame(audiodata, audiodata.length);
     }
     
     
+    protected void pushRecordedAudioFrame(byte[] audiodata, int length){
+        if (length==0) return;
+        byte[] buf = Arrays.copyOf(audiodata, length);        
+        outputSlot.onNext(buf);
+    }    
+            
     public void run(){
         proceed = true;
 
@@ -270,5 +236,5 @@ public class AudioRecorder extends Thread{
         log.info("stop audio capturing");
         closeInputLine();        
     }
-    
+
 }

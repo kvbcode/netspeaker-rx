@@ -1,4 +1,5 @@
 apply plugin: 'java'
+apply plugin: 'maven-publish'
 
 sourceCompatibility = '1.8'
 [compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
@@ -11,10 +12,55 @@ sourceCompatibility = '1.8'
 // prefer. In this case NetBeans will not add these tasks but you may rely on
 // your own implementation.
 if (!hasProperty('mainClass')) {
-    ext.mainClass = 'com.cyber.rx.netspeaker.Main'
+    ext.mainClass = 'com.cyber.netspeaker.NetSpeakerRx'
 }
 
+jar {
+    manifest { attributes 'Main-Class': 'com.cyber.netspeaker.NetSpeakerRx' }
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    baseName = project.name + '-all'
+}
+
+group 'com.cyber.netspeaker'
+version='0.0.1-SNAPSHOT'
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            
+            artifact sourceJar
+            artifact packageJavadoc            
+        }
+    }
+}
+
+javadoc {
+  source = sourceSets.main.allJava
+  classpath = configurations.compileClasspath
+
+  options
+  {
+    setMemberLevel JavadocMemberLevel.PUBLIC
+    setAuthor true
+
+    links "https://docs.oracle.com/javase/8/docs/api/"
+  }
+}
+
+task sourceJar(type: Jar) {
+  classifier = 'sources'
+  from sourceSets.main.allJava
+}
+
+task packageJavadoc(type: Jar) {
+    from javadoc
+    classifier = 'javadoc'
+}
+
+
 repositories {
+    mavenLocal()
     mavenCentral()
     // You may define additional repositories, or even remove "mavenCentral()".
     // Read more about repositories here:
@@ -26,7 +72,9 @@ dependencies {
     compile 'ch.qos.logback:logback-core:1.2.3'
     compile 'ch.qos.logback:logback-classic:1.2.3'
     compile 'io.reactivex.rxjava2:rxjava:2.2.2'
-    compile 'com.google.dagger:dagger:2.17'
+    //compile 'com.google.dagger:dagger:2.17'
+    
+    compile 'com.cyber.net:networking-rx:0.1.2-SNAPSHOT'
     
     // TODO: Add dependencies here ...
     // You can read more about how to add dependency here:
