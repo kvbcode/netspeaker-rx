@@ -41,6 +41,7 @@ javadoc {
 
   options
   {
+    encoding = 'UTF-8'
     setMemberLevel JavadocMemberLevel.PUBLIC
     setAuthor true
 
