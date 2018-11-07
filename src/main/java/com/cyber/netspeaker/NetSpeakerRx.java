@@ -40,7 +40,8 @@ public class NetSpeakerRx {
     
     private NetSpeakerRx(){
         AudioFormat.Encoding encoding = AudioFormat.Encoding.PCM_SIGNED;
-        float rate = 32000.0F;
+        //float rate = 32000.0F;
+        float rate = 44100.0F;
         int sampleBits = 16;
         int channels = 2;
         boolean bigEndian = false;

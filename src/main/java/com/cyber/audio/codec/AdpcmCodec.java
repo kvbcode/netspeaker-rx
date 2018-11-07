@@ -23,6 +23,10 @@ import javax.sound.sampled.AudioFormat;
 public class AdpcmCodec implements AudioCodec{
 
     protected final AudioFormat format;
+    protected final int headerSize = 8;
+    protected int lPredictedEnc = 0, rPredictedEnc = 0;
+    protected int lStepIdxEnc = 0, rStepIdxEnc = 0;
+    
 
     private static final int[] STEP_SIZE_TABLE = {
         7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
@@ -51,49 +55,62 @@ public class AdpcmCodec implements AudioCodec{
     }
 
     @Override
-    public byte[] encode(byte[] input) {
-		int inputIdx = 0, outputIdx = 0;
-    	int lStepIdx=0, rStepIdx=0, lPredicted=0, rPredicted=0;		
-        int count = input.length / 4;
-        byte[] output = new byte[count];
-        
-        while( outputIdx < count ) {
+    public byte[] encode(byte[] input) {       
+        int count = input.length / 4;        
+		int outputEnd = count + headerSize;
+        byte[] output = new byte[ outputEnd ];
+        int inputIdx = 0, outputIdx = headerSize;
+                
+        //write header data
+        output[0] = (byte)  lPredictedEnc;
+        output[1] = (byte) (lPredictedEnc >> 8);
+        output[2] = (byte)  rPredictedEnc;
+        output[3] = (byte) (rPredictedEnc >> 8);
+        output[4] = (byte)  lStepIdxEnc;
+        output[5] = (byte)  rStepIdxEnc;
+
+        while( outputIdx < outputEnd ) {
 			int lSam  = ( input[ inputIdx++ ] & 0xFF ) | ( input[ inputIdx++ ] << 8 );
 			int rSam  = ( input[ inputIdx++ ] & 0xFF ) | ( input[ inputIdx++ ] << 8 );
-			int lStep = STEP_SIZE_TABLE[ lStepIdx ];
-			int rStep = STEP_SIZE_TABLE[ rStepIdx ];
-			int lCode = ( ( lSam - lPredicted ) * 4 + lStep * 8 ) / lStep;
-			int rCode = ( ( rSam - rPredicted ) * 4 + rStep * 8 ) / rStep;
+			int lStep = STEP_SIZE_TABLE[ lStepIdxEnc ];
+			int rStep = STEP_SIZE_TABLE[ rStepIdxEnc ];
+			int lCode = ( ( lSam - lPredictedEnc ) * 4 + lStep * 8 ) / lStep;
+			int rCode = ( ( rSam - rPredictedEnc ) * 4 + rStep * 8 ) / rStep;
 			if( lCode > 15 ) lCode = 15;
 			if( rCode > 15 ) rCode = 15;
 			if( lCode <  0 ) lCode =  0;
 			if( rCode <  0 ) rCode =  0;
-			lPredicted += ( ( lCode * lStep ) >> 2 ) - ( ( 15 * lStep ) >> 3 );
-			rPredicted += ( ( rCode * rStep ) >> 2 ) - ( ( 15 * rStep ) >> 3 );
-			if( lPredicted >  32767 ) lPredicted =  32767;
-			if( rPredicted >  32767 ) rPredicted =  32767;
-			if( lPredicted < -32768 ) lPredicted = -32768;
-			if( rPredicted < -32768 ) rPredicted = -32768;
-			lStepIdx += STEP_DELTA_TABLE[ lCode ];
-			rStepIdx += STEP_DELTA_TABLE[ rCode ];
-			if( lStepIdx > 88 ) lStepIdx = 88;
-			if( rStepIdx > 88 ) rStepIdx = 88;
-			if( lStepIdx <  0 ) lStepIdx =  0;
-			if( rStepIdx <  0 ) rStepIdx =  0;
+			lPredictedEnc += ( ( lCode * lStep ) >> 2 ) - ( ( 15 * lStep ) >> 3 );
+			rPredictedEnc += ( ( rCode * rStep ) >> 2 ) - ( ( 15 * rStep ) >> 3 );
+			if( lPredictedEnc >  32767 ) lPredictedEnc =  32767;
+			if( rPredictedEnc >  32767 ) rPredictedEnc =  32767;
+			if( lPredictedEnc < -32768 ) lPredictedEnc = -32768;
+			if( rPredictedEnc < -32768 ) rPredictedEnc = -32768;
+			lStepIdxEnc += STEP_DELTA_TABLE[ lCode ];
+			rStepIdxEnc += STEP_DELTA_TABLE[ rCode ];
+			if( lStepIdxEnc > 88 ) lStepIdxEnc = 88;
+			if( rStepIdxEnc > 88 ) rStepIdxEnc = 88;
+			if( lStepIdxEnc <  0 ) lStepIdxEnc =  0;
+			if( rStepIdxEnc <  0 ) rStepIdxEnc =  0;
 			output[ outputIdx++ ] = ( byte ) ( ( lCode << 4 ) | rCode );
 		}
-        
+                                
         return output;
     }
 
     @Override
     public byte[] decode(byte[] input) {
-    	int lStepIdx=0, rStepIdx=0, lPredicted=0, rPredicted=0;		
-        int count = input.length;
-        byte[] output = new byte[count*4];
+        int count = input.length - headerSize;
+        byte[] output = new byte[ count * 4 ];
 
-        int inputIdx = 0, outputIdx = 0, outputEnd = count * 4;
+        int inputIdx = headerSize, outputIdx = 0, outputEnd = count * 4;
 
+        // read header
+        int lPredicted  = ( input[ 0 ] & 0xFF ) | ( input[ 1 ] << 8 );
+        int rPredicted  = ( input[ 2 ] & 0xFF ) | ( input[ 3 ] << 8 );        
+        int lStepIdx = input[4] & 0xFF;
+        int rStepIdx = input[5] & 0xFF;
+        
         while( outputIdx < outputEnd ) {
 			int lCode = input[ inputIdx++ ] & 0xFF;
 			int rCode = lCode & 0xF;
