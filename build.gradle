@@ -22,7 +22,7 @@ jar {
 }
 
 group 'com.cyber.netspeaker'
-version='0.0.2-SNAPSHOT'
+version='0.0.5-SNAPSHOT'
 
 publishing {
     publications {
@@ -73,9 +73,10 @@ dependencies {
     compile 'ch.qos.logback:logback-core:1.2.3'
     compile 'ch.qos.logback:logback-classic:1.2.3'
     compile 'io.reactivex.rxjava2:rxjava:2.2.2'
-    //compile 'com.google.dagger:dagger:2.17'
-    
-    compile 'com.cyber.net:networking-rx:0.1.2-SNAPSHOT'
+    //compile 'com.google.dagger:dagger:2.17'    
+    //compile 'io.netty:netty-all:4.1.31.Final'
+
+    compile 'com.cyber.net:networking-rx:0.2.4-SNAPSHOT'
     
     // TODO: Add dependencies here ...
     // You can read more about how to add dependency here:

@@ -25,7 +25,7 @@ public class AudioPlayerRx extends AudioPlayer implements Observer<byte[]>{
     public void onSubscribe(Disposable d) {
         if( openOutputLine()!=null ){        
             silenceCheck = Observable.interval(0, SILENCE_CHECK_INTERVAL, TimeUnit.MILLISECONDS)
-                .subscribe(c -> checkFullSilence());              
+                .subscribe(c -> flushOnDeepSilence());              
         }
     }
 

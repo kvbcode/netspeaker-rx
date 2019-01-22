@@ -9,10 +9,11 @@ import com.cyber.audio.*;
 import com.cyber.audio.codec.AdpcmCodec;
 import com.cyber.audio.codec.AudioCodec;
 import com.cyber.audio.codec.R16B12Codec;
-import com.cyber.net.rx.UdpConnection;
+import com.cyber.net.rx.UdpChannel;
 import com.cyber.net.rx.impl.UdpClient;
 import com.cyber.net.rx.impl.UdpServer;
 import io.reactivex.Observable;
+import io.reactivex.Single;
 import io.reactivex.disposables.Disposable;
 
 import org.slf4j.Logger;
@@ -36,8 +37,6 @@ public class NetSpeakerRx {
     public final AudioFormat format;
     public final AudioCodec codec;
     
-    private static volatile NetSpeakerRx instance = null;
-    
     private NetSpeakerRx(){
         AudioFormat.Encoding encoding = AudioFormat.Encoding.PCM_SIGNED;
         //float rate = 32000.0F;
@@ -53,51 +52,46 @@ public class NetSpeakerRx {
         codec = new AdpcmCodec(format);
         log.info("Codec: {}", codec.getFullName());
     }
-    
-    
-    public static NetSpeakerRx getInstance(){
-        if (instance==null){
-            instance = new NetSpeakerRx();
-        }
-        return instance;
-    }
-    
-    public static void main(String[] args) throws IOException{        
+        
+    public static void main(String[] args) throws Exception{        
         log.info("NetSpeakerCore " + Arrays.toString(args));        
         
-        if (args.length==2){
-            //client
-            String runMode = args[0].toLowerCase();
-            String addr = args[1];
-            
-            switch(runMode){
-                case "play":
-                    new NetSpeakerRx().startClientPlayer(addr, netPort);                                    
-                    break;
-                case "record":
-                    new NetSpeakerRx().startClientRecorder(addr, netPort);                    
-                    break;
-            }            
-        }else if (args.length==1){
-            //server
-            String runMode = args[0].toLowerCase();
+        String runMode = args[0].toLowerCase();
 
-            switch(runMode){
-                case "play":
-                    new NetSpeakerRx().startServerPlayer(netPort);                                
-                    break;
-                case "multicast":
-                    new NetSpeakerRx().startServerMulticast(netPort);                                
-                    break;
-            }                        
-        }else{
-            log.info("server mode:");
-            log.info("netspeaker <play|record|multicast>");
-            log.info("client mode:");
-            log.info("netspeaker <play|record> <serverIp>");
-        }                
+        switch (args.length) {
+            case 2:{
+                //client
+                String addr = args[1];
+                switch(runMode){
+                    case "play":
+                        new NetSpeakerRx().startClientPlayer(addr, netPort);
+                        break;
+                    case "record":
+                        new NetSpeakerRx().startClientRecorder(addr, netPort);
+                        break;
+                }
+                break;
+            }
+            case 1:{
+                //server
+                switch(runMode){
+                    case "play":
+                        new NetSpeakerRx().startServerPlayer(netPort);
+                        break;
+                    case "multicast":
+                        new NetSpeakerRx().startServerMulticast(netPort);
+                        break;
+                }
+                break;
+            }
+            default:
+                log.info("server mode:");
+                log.info("netspeaker <play|record|multicast>");                
+                log.info("client mode:");
+                log.info("netspeaker <play|record> <serverIp>");
+                break;
+        }
         
-        log.trace("exit Main()", "");
     }        
     
     
@@ -112,11 +106,11 @@ public class NetSpeakerRx {
         server.observeConnection()
             .subscribe( conn -> {
                 
-                conn.getDownstream()                        
+                conn.getFlow()
                     .map( b -> codec.decode(b) )
                     .subscribeWith( playerFactory.get() );
 
-                conn.getDownstream()
+                conn.getFlow()
                     .map(b -> b.length)
                     .buffer(10, TimeUnit.SECONDS)
                     .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
@@ -141,14 +135,14 @@ public class NetSpeakerRx {
         server.observeConnection()
             .subscribe( conn -> {
 
-                conn.getDownstream()
+                conn.getFlow()
                     .subscribe(data -> {
-                        server.getConnectionStorage().iterate()
+                        server.getChannels().iterate()
                             .filter(e -> e.getValue()!= conn)
-                            .subscribe(e -> e.getValue().getUpstream().onNext(data));
+                            .subscribe(e -> e.getValue().onNext(data));
                     });
                 
-                conn.getDownstream()
+                conn.getFlow()
                     .map(b -> b.length)
                     .buffer(10, TimeUnit.SECONDS)
                     .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
@@ -169,56 +163,50 @@ public class NetSpeakerRx {
         
         log.info("client (recorder) connect to " + remoteSocketAddress);
 
-        UdpConnection conn = UdpClient.connect( remoteSocketAddress );
+        UdpChannel conn = UdpClient.connect( remoteSocketAddress );
         
         AudioRecorderRx recorder = new AudioRecorderRx(format);
-        recorder.setRestartInterval( 6*60*60 );
-        recorder.setSilenceFilter(16);
+        recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
+        recorder.setSilenceFilterValue(16);
         recorder.start();        
         
-        recorder.outputSlot()
+        recorder.getFlow()
             .map(rawAudioData -> codec.encode(rawAudioData))
-            .subscribeWith( conn.getUpstream() );
+            .subscribeWith( conn );
         
     }
 
-    // prototype
+    /*
+        В режиме мультикаста клиент-плеер никак не выдает свое состояние серверу
+        поэтому необходимо отправить данные для начала коннекта
+        и периодически уведомлять сервер о keep-alive
+    */
+    
     public void startClientPlayer(String host, int port) throws IOException{
         SocketAddress remoteSocketAddress = new InetSocketAddress(host, port);
         
         log.info("client (player) connect to " + remoteSocketAddress);
 
-        UdpConnection conn = UdpClient.connect( remoteSocketAddress );
+        UdpChannel conn = UdpClient.connect( remoteSocketAddress );
         
         AudioPlayerRx player = new AudioPlayerRx(format);
+                
+        final byte[] pingBytes = new byte[]{0,0,0,0};        
 
-        final byte[] pingBytes = new byte[]{0,0,0,0};
-
-        
-        Disposable connInitSub = Observable.interval(1000, TimeUnit.MILLISECONDS)
-            .doOnTerminate(() -> log.debug("end connection init"))
-            .doOnNext(i -> {
-                log.debug("conn.start");
-                conn.getUpstream().onNext(pingBytes);
-            })
-            .subscribe(i -> log.debug("conn complete"),
-                        err -> log.error("conn error: " + err));
-
-        // wait first data
-        conn.getDownstream().blockingFirst();
-
-        connInitSub.dispose();
-        
-        conn.getDownstream()
-            .map( data -> codec.decode(data) )
-            .subscribeWith(player);            
-
-        Observable.interval(SERVER_TIMEOUT/4, TimeUnit.MILLISECONDS)
+        Disposable keepAlive = Observable.interval(SERVER_TIMEOUT/4, TimeUnit.MILLISECONDS)
             .subscribe(i -> {
                 log.debug("send ping");
-                conn.getUpstream().onNext(pingBytes);
+                conn.onNext( pingBytes );
             });
+
+        conn.getFlow()
+            .doOnTerminate( () -> keepAlive.dispose() )
+            .map( data -> codec.decode(data) )
+            .subscribeWith(player);                    
         
+        // wait first data
+        conn.getFlow().blockingFirst();
+        log.info("connection start");
         
     }
     

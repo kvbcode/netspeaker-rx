@@ -71,7 +71,7 @@ public class AudioPlayer{
         }
     }
     
-    public boolean checkFullSilence(){
+    public boolean flushOnDeepSilence(){
         if (getLastPlaybackTimeDelta() > SILENCE_CHECK_INTERVAL){
             outputLine.flush();
             return true;
@@ -150,7 +150,7 @@ public class AudioPlayer{
      * @param audiodata (null игнорируется без ошибки)
      */
     
-    protected void playAudioBuffer(byte[] audiodata){            
+    public void playAudioBuffer(byte[] audiodata){            
         if (audiodata.length > outputLine.available()){
             log.warn("line.buffer.overflow!");
         }

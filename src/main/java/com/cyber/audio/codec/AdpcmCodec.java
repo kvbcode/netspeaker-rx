@@ -23,7 +23,9 @@ import javax.sound.sampled.AudioFormat;
 public class AdpcmCodec implements AudioCodec{
 
     protected final AudioFormat format;
-    protected final int headerSize = 8;
+    protected final int headerSize = 6;
+    
+    //encoder state for every frame
     protected int lPredictedEnc = 0, rPredictedEnc = 0;
     protected int lStepIdxEnc = 0, rStepIdxEnc = 0;
     
@@ -51,7 +53,7 @@ public class AdpcmCodec implements AudioCodec{
 
     @Override
     public String getFullName() {
-        return "ADPCM AudioCodec [16bit LE Stereo only]";
+        return "ADPCM [16bit LE Stereo only]";
     }
 
     @Override

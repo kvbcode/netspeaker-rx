@@ -33,7 +33,7 @@ public class AudioRecorderRx extends Thread{
     
     protected byte[] inputBuffer;
     
-    private PublishSubject<byte[]> outputSlot = PublishSubject.create();
+    private PublishSubject<byte[]> flow = PublishSubject.create();
     
     public AudioRecorderRx(AudioFormat format){
         setName("AudioRecorder-" + getId());
@@ -44,8 +44,8 @@ public class AudioRecorderRx extends Thread{
         updateLastAudioSignalTime();
     }
     
-    public Subject<byte[]> outputSlot(){
-        return outputSlot;
+    public Subject<byte[]> getFlow(){
+        return flow;
     }
             
     
@@ -64,7 +64,7 @@ public class AudioRecorderRx extends Thread{
     }
     
     
-    public void setSilenceFilter(int threshold){
+    public void setSilenceFilterValue(int threshold){
         this.silenceThreshold = threshold;
     }
         
@@ -74,7 +74,7 @@ public class AudioRecorderRx extends Thread{
     }
         
     
-    public void setRestartInterval(int tsec){
+    public void setRestartInterval(long tsec){
         this.restartLineInterval = tsec * 1000;
     }
     
@@ -192,7 +192,7 @@ public class AudioRecorderRx extends Thread{
     protected void pushRecordedAudioFrame(byte[] audiodata, int length){
         if (length==0) return;
         byte[] buf = Arrays.copyOf(audiodata, length);        
-        outputSlot.onNext(buf);
+        flow.onNext(buf);
     }    
             
     public void run(){
