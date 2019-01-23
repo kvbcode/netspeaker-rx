@@ -13,7 +13,6 @@ import com.cyber.net.rx.UdpChannel;
 import com.cyber.net.rx.impl.UdpClient;
 import com.cyber.net.rx.impl.UdpServer;
 import io.reactivex.Observable;
-import io.reactivex.Single;
 import io.reactivex.disposables.Disposable;
 
 import org.slf4j.Logger;
@@ -32,7 +31,8 @@ public class NetSpeakerRx {
     protected static final String PROPERTIES_FILENAME = "app.properties";
     protected static final Logger log = LoggerFactory.getLogger("NetSpeakerRx");
     protected static int netPort = 13801;        
-    protected static final long SERVER_TIMEOUT = TimeUnit.MINUTES.toMillis(10);
+    protected static final long SERVER_TIMEOUT = TimeUnit.MINUTES.toMillis(1);
+    protected final byte[] PING_BYTES = "PING".getBytes();
     
     public final AudioFormat format;
     public final AudioCodec codec;
@@ -78,21 +78,37 @@ public class NetSpeakerRx {
                     case "play":
                         new NetSpeakerRx().startServerPlayer(netPort);
                         break;
+                    case "record":
+                        new NetSpeakerRx().startServerRecorder(netPort);
+                        break;
                     case "multicast":
                         new NetSpeakerRx().startServerMulticast(netPort);
+                        break;
+                    case "play_and_multicast":
+                        new NetSpeakerRx().startServerPlayAndMulticast(netPort);
                         break;
                 }
                 break;
             }
             default:
                 log.info("server mode:");
-                log.info("netspeaker <play|record|multicast>");                
+                log.info("netspeaker <play|record|multicast|play_and_multicast>");                
                 log.info("client mode:");
                 log.info("netspeaker <play|record> <serverIp>");
                 break;
         }
         
     }        
+    
+    public static Disposable logSpeed(Observable<byte[]> flow, String title){
+        return flow
+            .map(b -> b.length)
+            .buffer(10, TimeUnit.SECONDS)
+            .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
+            .subscribe( d -> {
+                if (d>0) log.debug("{}, {} ({} Kb/s)", title, d, String.format("%.2f", d / 10.0 / 1024.0));
+            });
+    }
     
     
     public void startServerPlayer(int port) throws IOException{
@@ -109,23 +125,41 @@ public class NetSpeakerRx {
                 conn.getFlow()
                     .map( b -> codec.decode(b) )
                     .subscribeWith( playerFactory.get() );
-
-                conn.getFlow()
-                    .map(b -> b.length)
-                    .buffer(10, TimeUnit.SECONDS)
-                    .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
-                    .subscribe( d -> {
-                        if (d>0) log.debug("{}, udp.in: {} ({} Kb/s)", conn, d, String.format("%.2f", d / 10.0 / 1024.0));
-                    });
-                
-            } );
+            });
         
+        server.observeConnection()                
+            .subscribe(conn -> logSpeed(conn.getFlow(), "udp.in: " + conn.toString()) );
         
         server.observeConnection()
-            .subscribe(conn -> log.info("new connection: {}", conn));
+            .subscribe( conn -> log.info("new connection: {}", conn) );
         
     }
 
+    public void startServerRecorder(int port) throws IOException{
+        log.info("start server (recorder) on port: " + port);
+        
+        final UdpServer server = new UdpServer(port);
+        server.setTimeout(SERVER_TIMEOUT);        
+
+        AudioRecorderRx recorder = new AudioRecorderRx(format);
+        recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
+        recorder.setSilenceFilterValue(16);
+        recorder.start();        
+                
+        server.observeConnection()
+            .subscribe( conn -> {
+
+                recorder.getFlow()
+                    .map(rawAudioData -> codec.encode(rawAudioData))
+                    .subscribeWith( conn );
+                
+            } );
+                
+        server.observeConnection()
+            .subscribe( conn -> log.info("new connection: {}", conn) );
+    }
+    
+    
     public void startServerMulticast(int port) throws IOException{
         log.info("start server (multicast) on port: " + port);
         
@@ -136,18 +170,11 @@ public class NetSpeakerRx {
             .subscribe( conn -> {
 
                 conn.getFlow()
+                    .doOnTerminate( () -> log.info("connection closed: {}", conn ) )    
                     .subscribe(data -> {
                         server.getChannels().iterate()
                             .filter(e -> e.getValue()!= conn)
                             .subscribe(e -> e.getValue().onNext(data));
-                    });
-                
-                conn.getFlow()
-                    .map(b -> b.length)
-                    .buffer(10, TimeUnit.SECONDS)
-                    .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
-                    .subscribe( d -> {
-                        if (d>0) log.debug("{}, udp.in: {} ({} Kb/s)", conn, d, String.format("%.2f", d / 10.0 / 1024.0));
                     });
                 
             } );
@@ -157,11 +184,41 @@ public class NetSpeakerRx {
         
     }
     
+    public void startServerPlayAndMulticast(int port) throws IOException{
+        log.info("start server (play and multicast) on port: " + port);
+        
+        final UdpServer server = new UdpServer(port);
+        server.setTimeout(SERVER_TIMEOUT);        
+
+        Supplier<AudioPlayerRx> playerFactory = () -> new AudioPlayerRx(format);
+
+        server.observeConnection()
+            .subscribe( conn -> {
+
+                conn.getFlow()
+                    .filter( data -> !Arrays.equals( data, PING_BYTES) )
+                    .map( b -> codec.decode(b) )
+                    .subscribeWith( playerFactory.get() );
+
+                conn.getFlow()
+                    .doOnTerminate( () -> log.info("connection closed: {}", conn ) )    
+                    .subscribe(data -> {
+                        server.getChannels().iterate()
+                            .filter(e -> e.getValue()!= conn)
+                            .subscribe(e -> e.getValue().onNext(data));
+                    });
+                
+            } );
+
+        server.observeConnection()
+            .subscribe(conn -> log.info("new connection: {}", conn));
+        
+    }
     
     public void startClientRecorder(String host, int port) throws IOException{
         SocketAddress remoteSocketAddress = new InetSocketAddress(host, port);
         
-        log.info("client (recorder) connect to " + remoteSocketAddress);
+        log.info("client (recorder) connecting to " + remoteSocketAddress);
 
         UdpChannel conn = UdpClient.connect( remoteSocketAddress );
         
@@ -185,18 +242,16 @@ public class NetSpeakerRx {
     public void startClientPlayer(String host, int port) throws IOException{
         SocketAddress remoteSocketAddress = new InetSocketAddress(host, port);
         
-        log.info("client (player) connect to " + remoteSocketAddress);
+        log.info("client (player) connecting to " + remoteSocketAddress);
 
         UdpChannel conn = UdpClient.connect( remoteSocketAddress );
         
         AudioPlayerRx player = new AudioPlayerRx(format);
                 
-        final byte[] pingBytes = new byte[]{0,0,0,0};        
-
         Disposable keepAlive = Observable.interval(SERVER_TIMEOUT/4, TimeUnit.MILLISECONDS)
             .subscribe(i -> {
                 log.debug("send ping");
-                conn.onNext( pingBytes );
+                conn.onNext( PING_BYTES );
             });
 
         conn.getFlow()
@@ -205,6 +260,7 @@ public class NetSpeakerRx {
             .subscribeWith(player);                    
         
         // wait first data
+        conn.onNext( PING_BYTES );
         conn.getFlow().blockingFirst();
         log.info("connection start");
         
