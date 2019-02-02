@@ -28,16 +28,19 @@ import javax.sound.sampled.AudioFormat;
 
 
 public class NetSpeakerRx {    
-    protected static final String PROPERTIES_FILENAME = "app.properties";
-    protected static final Logger log = LoggerFactory.getLogger("NetSpeakerRx");
-    protected static int netPort = 13801;        
-    protected static final long SERVER_TIMEOUT = TimeUnit.MINUTES.toMillis(1);
-    protected final byte[] PING_BYTES = "PING".getBytes();
+    protected static final Logger LOG = LoggerFactory.getLogger("NetSpeakerRx");
+    protected static final long SERVER_TIMEOUT = TimeUnit.MINUTES.toMillis(10);
+    protected static final byte[] PING_BYTES = "PING".getBytes();
     
-    public final AudioFormat format;
-    public final AudioCodec codec;
+    public static final AudioFormat format;
+    public static final AudioCodec codec;
     
-    private NetSpeakerRx(){
+    public static Supplier<AudioPlayerRx> playerFactory;
+    public static AudioRecorderRx recorder = null;
+
+    static{
+        LOG.info("NetSpeakerRx Core");
+        
         AudioFormat.Encoding encoding = AudioFormat.Encoding.PCM_SIGNED;
         //float rate = 32000.0F;
         float rate = 44100.0F;
@@ -46,225 +49,178 @@ public class NetSpeakerRx {
         boolean bigEndian = false;
         
         format = new AudioFormat( encoding, rate, sampleBits, channels, (sampleBits/8)*channels, rate, bigEndian );
-        log.info("AudioFormat: {}", format);
+        LOG.info("AudioFormat: {}", format);
         
         //codec = new R16B12Codec(format);
         codec = new AdpcmCodec(format);
-        log.info("Codec: {}", codec.getFullName());
+        LOG.info("Codec: {}", codec.getFullName());
+        
+        playerFactory = () -> new AudioPlayerRx(format);
+                
     }
-        
-    public static void main(String[] args) throws Exception{        
-        log.info("NetSpeakerCore " + Arrays.toString(args));        
-        
-        String runMode = args[0].toLowerCase();
 
-        switch (args.length) {
-            case 2:{
-                //client
-                String addr = args[1];
-                switch(runMode){
-                    case "play":
-                        new NetSpeakerRx().startClientPlayer(addr, netPort);
-                        break;
-                    case "record":
-                        new NetSpeakerRx().startClientRecorder(addr, netPort);
-                        break;
-                }
-                break;
-            }
-            case 1:{
-                //server
-                switch(runMode){
-                    case "play":
-                        new NetSpeakerRx().startServerPlayer(netPort);
-                        break;
-                    case "record":
-                        new NetSpeakerRx().startServerRecorder(netPort);
-                        break;
-                    case "multicast":
-                        new NetSpeakerRx().startServerMulticast(netPort);
-                        break;
-                    case "play_and_multicast":
-                        new NetSpeakerRx().startServerPlayAndMulticast(netPort);
-                        break;
-                }
-                break;
-            }
-            default:
-                log.info("server mode:");
-                log.info("netspeaker <play|record|multicast|play_and_multicast>");                
-                log.info("client mode:");
-                log.info("netspeaker <play|record> <serverIp>");
-                break;
+    synchronized public static AudioRecorderRx getAudioRecorder(){
+        if (recorder==null){        
+            recorder = new AudioRecorderRx(format);
+            recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
+            recorder.setSilenceFilterValue(16);
+            recorder.start();            
         }
-        
-    }        
-    
+        return recorder;
+    }
+
     public static Disposable logSpeed(Observable<byte[]> flow, String title){
         return flow
             .map(b -> b.length)
             .buffer(10, TimeUnit.SECONDS)
             .map(values -> values.stream().reduce(0, (a, v) -> v+a ))
-            .subscribe( d -> {
-                if (d>0) log.debug("{}, {} ({} Kb/s)", title, d, String.format("%.2f", d / 10.0 / 1024.0));
+            .subscribe(d -> {
+                if (d>0) LOG.debug("{}, {} ({} Kb/s)", title, d, String.format("%.2f", d / 10.0F / 1024.0F));
             });
     }
     
-    
-    public void startServerPlayer(int port) throws IOException{
-        log.info("start server (player) on port: " + port);
-        
-        final UdpServer server = new UdpServer(port);
-        server.setTimeout(SERVER_TIMEOUT);
-        
-        Supplier<AudioPlayerRx> playerFactory = () -> new AudioPlayerRx(format);
+    public static class Server{
+        final UdpServer server;
 
-        server.observeConnection()
-            .subscribe( conn -> {
-                
-                conn.getFlow()
-                    .map( b -> codec.decode(b) )
-                    .subscribeWith( playerFactory.get() );
-            });
-        
-        server.observeConnection()                
-            .subscribe(conn -> logSpeed(conn.getFlow(), "udp.in: " + conn.toString()) );
-        
-        server.observeConnection()
-            .subscribe( conn -> log.info("new connection: {}", conn) );
-        
-    }
+        public Server(int port) throws IOException{
+            LOG.info("start server on port: " + port);
 
-    public void startServerRecorder(int port) throws IOException{
-        log.info("start server (recorder) on port: " + port);
-        
-        final UdpServer server = new UdpServer(port);
-        server.setTimeout(SERVER_TIMEOUT);        
+            server = new UdpServer(port);
+            server.setTimeout(SERVER_TIMEOUT);
 
-        AudioRecorderRx recorder = new AudioRecorderRx(format);
-        recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
-        recorder.setSilenceFilterValue(16);
-        recorder.start();        
-                
-        server.observeConnection()
-            .subscribe( conn -> {
+            server.observeConnection()
+                .subscribe(conn -> LOG.info("new connection: {}", conn) );        
+        }
+        
+        public void startPlayer(){            
+            LOG.info("server mode: PLAY");
+            
+            server.observeConnection()
+                .subscribe( conn -> {
 
-                recorder.getFlow()
-                    .map(rawAudioData -> codec.encode(rawAudioData))
-                    .subscribeWith( conn );
-                
-            } );
-                
-        server.observeConnection()
-            .subscribe( conn -> log.info("new connection: {}", conn) );
-    }
-    
-    
-    public void startServerMulticast(int port) throws IOException{
-        log.info("start server (multicast) on port: " + port);
-        
-        final UdpServer server = new UdpServer(port);
-        server.setTimeout(SERVER_TIMEOUT);        
-        
-        server.observeConnection()
-            .subscribe( conn -> {
+                    conn.getFlow()
+                        .map( b -> codec.decode(b) )
+                        .subscribeWith( playerFactory.get() );
+                });
+        }
 
-                conn.getFlow()
-                    .doOnTerminate( () -> log.info("connection closed: {}", conn ) )    
-                    .subscribe(data -> {
-                        server.getChannels().iterate()
-                            .filter(e -> e.getValue()!= conn)
-                            .subscribe(e -> e.getValue().onNext(data));
-                    });
-                
-            } );
-        
-        server.observeConnection()
-            .subscribe(conn -> log.info("new connection: {}", conn));
-        
-    }
-    
-    public void startServerPlayAndMulticast(int port) throws IOException{
-        log.info("start server (play and multicast) on port: " + port);
-        
-        final UdpServer server = new UdpServer(port);
-        server.setTimeout(SERVER_TIMEOUT);        
+        public void startRecorder(){
+            LOG.info("server mode: RECORD");
+            
+            AudioRecorderRx recorder = new AudioRecorderRx(format);
+            recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
+            recorder.setSilenceFilterValue(16);
+            recorder.start();        
 
-        Supplier<AudioPlayerRx> playerFactory = () -> new AudioPlayerRx(format);
+            server.observeConnection()
+                .subscribe( conn -> {
 
-        server.observeConnection()
-            .subscribe( conn -> {
+                    recorder.getFlow()
+                        .map(rawAudioData -> codec.encode(rawAudioData))
+                        .subscribeWith( conn );
 
-                conn.getFlow()
-                    .filter( data -> !Arrays.equals( data, PING_BYTES) )
-                    .map( b -> codec.decode(b) )
-                    .subscribeWith( playerFactory.get() );
+                } );        
+        }
+        
+        public void startRelay(){
+            LOG.info("server mode: RELAY");
 
-                conn.getFlow()
-                    .doOnTerminate( () -> log.info("connection closed: {}", conn ) )    
-                    .subscribe(data -> {
-                        server.getChannels().iterate()
-                            .filter(e -> e.getValue()!= conn)
-                            .subscribe(e -> e.getValue().onNext(data));
-                    });
-                
-            } );
+            server.observeConnection()
+                .subscribe(conn -> {
 
-        server.observeConnection()
-            .subscribe(conn -> log.info("new connection: {}", conn));
-        
-    }
-    
-    public void startClientRecorder(String host, int port) throws IOException{
-        SocketAddress remoteSocketAddress = new InetSocketAddress(host, port);
-        
-        log.info("client (recorder) connecting to " + remoteSocketAddress);
+                    conn.getFlow()
+                        .doOnTerminate(() -> LOG.info("connection closed: {}", conn ) )    
+                        .subscribe(data -> {
+                            server.getChannels().iterate()
+                                .filter(e -> e.getValue()!= conn)
+                                .subscribe(e -> e.getValue().onNext(data));
+                        });
 
-        UdpChannel conn = UdpClient.connect( remoteSocketAddress );
+                } );
+            
+        }
         
-        AudioRecorderRx recorder = new AudioRecorderRx(format);
-        recorder.setRestartInterval( TimeUnit.HOURS.toSeconds(6) );
-        recorder.setSilenceFilterValue(16);
-        recorder.start();        
-        
-        recorder.getFlow()
-            .map(rawAudioData -> codec.encode(rawAudioData))
-            .subscribeWith( conn );
-        
-    }
+        public void startPlayAndRelay(){
+            LOG.info("server mode: PLAY_AND_RELAY");            
+            
+            server.observeConnection()
+                .subscribe(conn -> {
 
-    /*
-        В режиме мультикаста клиент-плеер никак не выдает свое состояние серверу
-        поэтому необходимо отправить данные для начала коннекта
-        и периодически уведомлять сервер о keep-alive
-    */
-    
-    public void startClientPlayer(String host, int port) throws IOException{
-        SocketAddress remoteSocketAddress = new InetSocketAddress(host, port);
-        
-        log.info("client (player) connecting to " + remoteSocketAddress);
+                    conn.getFlow()
+                        .filter( data -> !Arrays.equals( data, PING_BYTES) )
+                        .map( b -> codec.decode(b) )
+                        .subscribeWith( playerFactory.get() );
 
-        UdpChannel conn = UdpClient.connect( remoteSocketAddress );
-        
-        AudioPlayerRx player = new AudioPlayerRx(format);
-                
-        Disposable keepAlive = Observable.interval(SERVER_TIMEOUT/4, TimeUnit.MILLISECONDS)
-            .subscribe(i -> {
-                log.debug("send ping");
-                conn.onNext( PING_BYTES );
-            });
+                    conn.getFlow()
+                        .doOnTerminate(() -> LOG.info("connection closed: {}", conn ) )    
+                        .subscribe(data -> {
+                            server.getChannels().iterate()
+                                .filter(e -> e.getValue()!= conn)
+                                .subscribe(e -> e.getValue().onNext(data));
+                        });
 
-        conn.getFlow()
-            .doOnTerminate( () -> keepAlive.dispose() )
-            .map( data -> codec.decode(data) )
-            .subscribeWith(player);                    
+                } ); 
+            
+        }
         
-        // wait first data
-        conn.onNext( PING_BYTES );
-        conn.getFlow().blockingFirst();
-        log.info("connection start");
+        public void enableSpeedLogging(){
+            server.observeConnection()                
+                .subscribe(conn -> logSpeed(conn.getFlow(), "udp.in: " + conn.toString()) );
+        }
         
     }
     
     
+    public static class Client{
+        SocketAddress remoteSocketAddress;
+        UdpChannel conn;
+                
+        public Client(String host, int port) throws IOException{
+            remoteSocketAddress = new InetSocketAddress(host, port);
+            LOG.info("start client, connecting to " + remoteSocketAddress);
+
+            conn = UdpClient.connect( remoteSocketAddress );
+            
+        }
+        
+        public void startRecorder(){
+            LOG.info("client mode: RECORDER");
+
+            getAudioRecorder().getFlow()
+                .map(rawAudioData -> codec.encode(rawAudioData))
+                .subscribeWith( conn );
+        }
+        
+        public void startPlayer(){
+            LOG.info("client mode: PLAYER");
+            
+            AudioPlayerRx player = playerFactory.get();
+            
+            /*
+            Клиент-плеер никак не выдает свое состояние серверу
+            поэтому необходимо отправить данные для начала коннекта
+            и периодически уведомлять сервер о keep-alive
+            */
+
+            Disposable keepAlive = Observable.interval(10, TimeUnit.SECONDS)
+                .subscribe(i -> {
+                    LOG.debug("send ping");
+                    conn.onNext( PING_BYTES );
+                });
+            
+            conn.getFlow()
+                .doOnTerminate( () -> keepAlive.dispose() )
+                .map( data -> codec.decode(data) )
+                .subscribeWith(player);                    
+
+            // wait first data
+            conn.onNext( PING_BYTES );
+            conn.getFlow().blockingFirst();
+            LOG.info("connection start");
+            
+        }
+        
+    }
+
+        
 }
