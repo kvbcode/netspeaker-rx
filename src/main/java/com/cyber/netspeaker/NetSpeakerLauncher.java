@@ -12,6 +12,8 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import java.util.ArrayDeque;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -20,6 +22,7 @@ import java.util.function.Consumer;
 
 @Command(sortOptions = false, subcommands = {NetSpeakerLauncher.StartServer.class, NetSpeakerLauncher.StartClient.class})
 public class NetSpeakerLauncher implements Runnable{
+    protected static final Logger LOG = LoggerFactory.getLogger("Launcher");
 
     public static enum ServerMode{
         play(s -> s.startPlayer()),
@@ -75,7 +78,7 @@ public class NetSpeakerLauncher implements Runnable{
 
         @Override
         public void run() {
-            System.out.printf("start server: %s on port %d%n", serverMode, port );
+            LOG.info("start server: {} on port {}", serverMode, port );
             
             try{
                 NetSpeakerRx.Server server = new NetSpeakerRx.Server(port);  
@@ -104,7 +107,7 @@ public class NetSpeakerLauncher implements Runnable{
 
         @Override
         public void run() {
-            System.out.printf("start client: %s. Connect to %s:%d%n", clientMode, host, port );
+            LOG.info("start client: {}. Connect to {}:{}", clientMode, host, port );
 
             try{
                 NetSpeakerRx.Client client = new NetSpeakerRx.Client(host, port);                
