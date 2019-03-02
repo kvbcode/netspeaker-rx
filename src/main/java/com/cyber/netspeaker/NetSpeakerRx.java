@@ -9,10 +9,13 @@ import com.cyber.audio.*;
 import com.cyber.audio.codec.AdpcmCodec;
 import com.cyber.audio.codec.AudioCodec;
 import com.cyber.audio.codec.R16B12Codec;
+import com.cyber.audio.dsp.AutoGain;
 import com.cyber.net.rx.UdpChannel;
 import com.cyber.net.rx.impl.UdpClient;
 import com.cyber.net.rx.impl.UdpServer;
 import io.reactivex.Observable;
+import io.reactivex.ObservableSource;
+import io.reactivex.ObservableTransformer;
 import io.reactivex.disposables.Disposable;
 
 import org.slf4j.Logger;
@@ -27,7 +30,7 @@ import java.util.function.Supplier;
 import javax.sound.sampled.AudioFormat;
 
 
-public class NetSpeakerRx {    
+public abstract class NetSpeakerRx {    
     protected static final Logger LOG = LoggerFactory.getLogger("NetSpeakerRx");
     protected static final long SERVER_TIMEOUT = TimeUnit.MINUTES.toMillis(10);
     protected static final byte[] PING_BYTES = "PING".getBytes();
@@ -37,6 +40,7 @@ public class NetSpeakerRx {
     
     public static Supplier<AudioPlayerRx> playerFactory;
     public static AudioRecorderRx recorder = null;
+    public static Supplier<AutoGain> autoGainFactory;
 
     static{
         LOG.info("NetSpeakerRx Core");
@@ -56,6 +60,8 @@ public class NetSpeakerRx {
         LOG.info("Codec: {}", codec.getFullName());
         
         playerFactory = () -> new AudioPlayerRx(format);
+        
+        autoGainFactory = () -> new AutoGain( bigEndian );
                 
     }
 
@@ -78,9 +84,24 @@ public class NetSpeakerRx {
                 if (d>0) LOG.debug("{}, {} ({} Kb/s)", title, d, String.format("%.2f", d / 10.0F / 1024.0F));
             });
     }
+
+    public static ObservableTransformer<byte[], byte[]> enableAutoGain(float targetGainValue){
+        ObservableTransformer<byte[],byte[]> agTransform;
+                
+        if (targetGainValue>0.0F){
+            LOG.info("AutoGain enabled, target value: " + targetGainValue);
+            AutoGain ag = autoGainFactory.get();
+            ag.setTargetGainValue(targetGainValue);
+            agTransform = (bytesObservable) -> bytesObservable.map(in -> ag.proceed(in));
+        }else{
+            agTransform = (bytesObservable) -> bytesObservable;
+        }
+        return agTransform;
+    }        
     
     public static class Server{
         final UdpServer server;
+        float autoGainValue = 0.0F;
 
         public Server(int port) throws IOException{
             LOG.info("start server on port: " + port);
@@ -96,10 +117,11 @@ public class NetSpeakerRx {
             LOG.info("server mode: PLAY");
             
             server.observeConnection()
-                .subscribe( conn -> {
+                .subscribe(conn -> {
 
                     conn.getFlow()
                         .map( b -> codec.decode(b) )
+                        .compose(enableAutoGain(autoGainValue) )
                         .subscribeWith( playerFactory.get() );
                 });
         }
@@ -113,9 +135,10 @@ public class NetSpeakerRx {
             recorder.start();        
 
             server.observeConnection()
-                .subscribe( conn -> {
+                .subscribe(conn -> {
 
                     recorder.getFlow()
+                        .compose(enableAutoGain(autoGainValue) )
                         .map(rawAudioData -> codec.encode(rawAudioData))
                         .subscribeWith( conn );
 
@@ -149,6 +172,7 @@ public class NetSpeakerRx {
                     conn.getFlow()
                         .filter( data -> !Arrays.equals( data, PING_BYTES) )
                         .map( b -> codec.decode(b) )
+                        .compose(enableAutoGain(autoGainValue) )
                         .subscribeWith( playerFactory.get() );
 
                     conn.getFlow()
@@ -174,6 +198,7 @@ public class NetSpeakerRx {
     public static class Client{
         SocketAddress remoteSocketAddress;
         UdpChannel conn;
+        float autoGainValue = 0.0F;
                 
         public Client(String host, int port) throws IOException{
             remoteSocketAddress = new InetSocketAddress(host, port);
@@ -187,6 +212,7 @@ public class NetSpeakerRx {
             LOG.info("client mode: RECORDER");
 
             getAudioRecorder().getFlow()
+                .compose(enableAutoGain(autoGainValue) )
                 .map(rawAudioData -> codec.encode(rawAudioData))
                 .subscribeWith( conn );
         }
@@ -211,6 +237,7 @@ public class NetSpeakerRx {
             conn.getFlow()
                 .doOnTerminate( () -> keepAlive.dispose() )
                 .map( data -> codec.decode(data) )
+                .compose(enableAutoGain(autoGainValue) )
                 .subscribeWith(player);                    
 
             // wait first data

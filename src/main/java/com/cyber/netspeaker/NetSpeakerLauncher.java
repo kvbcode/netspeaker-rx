@@ -76,12 +76,16 @@ public class NetSpeakerLauncher implements Runnable{
         @Option(names = "-p", paramLabel = "PORT", arity="1", defaultValue = "13801", description = "port (${DEFAULT-VALUE})")
         int port;
 
+        @Option(names = "-ag", paramLabel = "VALUE", arity="1", defaultValue = "0.0", description = "auto gain signal on play or record (${DEFAULT-VALUE})")
+        float autoGainValue;
+        
         @Override
         public void run() {
             LOG.info("start server: {} on port {}", serverMode, port );
             
             try{
-                NetSpeakerRx.Server server = new NetSpeakerRx.Server(port);  
+                NetSpeakerRx.Server server = new NetSpeakerRx.Server(port); 
+                server.autoGainValue = autoGainValue;
                 serverMode.apply(server);
             }catch(IOException ex){
                 ex.printStackTrace();
@@ -105,12 +109,16 @@ public class NetSpeakerLauncher implements Runnable{
         @Option(names = "-p", paramLabel = "PORT", arity="1", defaultValue = "13801", description = "port (${DEFAULT-VALUE})")
         int port;
 
+        @Option(names = "-ag", paramLabel = "VALUE", arity="1", defaultValue = "0.0", description = "auto gain signal on play or record (${DEFAULT-VALUE})")
+        float autoGainValue;
+        
         @Override
         public void run() {
             LOG.info("start client: {}. Connect to {}:{}", clientMode, host, port );
 
             try{
                 NetSpeakerRx.Client client = new NetSpeakerRx.Client(host, port);                
+                client.autoGainValue = autoGainValue;
                 clientMode.apply(client);
             }catch(IOException ex){
                 ex.printStackTrace();
